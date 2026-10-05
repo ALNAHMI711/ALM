@@ -13,6 +13,8 @@ from sqlalchemy import Boolean, Integer, String, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 from fastapi.staticfiles import StaticFiles
 
+from auth_routes import normalize_email, is_valid_account_id
+
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./yow.db")
 SECRET = os.getenv("ENTITLEMENT_SIGNING_SECRET", "")
 TOKEN_TTL = 900
