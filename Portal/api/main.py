@@ -239,6 +239,7 @@ def download_token(account_id: str, product_id: str, device_id: str):
 
 class RegisterRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=12, max_length=256)
 
 
 @app.post("/v1/accounts/register")
@@ -251,7 +252,7 @@ def register_account(payload: RegisterRequest):
         existing = db.scalar(select(Account).where(Account.email == email))
         if existing:
             raise HTTPException(status_code=409, detail="الحساب موجود")
-        account = Account(id=secrets.token_urlsafe(24), email=email)
+        account = Account(id=secrets.token_urlsafe(24), email=email, password_hash=hash_password(payload.password))
         db.add(account)
         db.commit()
     return {"account_id": account.id, "email": account.email}
