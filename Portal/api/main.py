@@ -11,6 +11,7 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import Boolean, Integer, String, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
+from fastapi.staticfiles import StaticFiles
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./yow.db")
 SECRET = os.getenv("ENTITLEMENT_SIGNING_SECRET", "")
@@ -63,6 +64,7 @@ class Device(Base):
 Base.metadata.create_all(engine)
 
 app = FastAPI(title="YOW Content & Commerce API", version="0.2.0")
+app.mount("/web", StaticFiles(directory="Portal/web", html=True), name="web")
 
 
 class DeviceBind(BaseModel):
