@@ -231,3 +231,20 @@ def download_token(account_id: str, product_id: str, device_id: str):
     expires_at = int(time.time()) + TOKEN_TTL
     token = sign_token(account_id, product_id, device_id, expires_at)
     return {"token": token, "expires_in": TOKEN_TTL, "product_id": product_id}
+
+
+class RegisterRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+
+
+@app.post("/v1/accounts/register")
+def register_account(payload: RegisterRequest):
+    email = payload.email.strip().lower()
+    with Session(engine) as db:
+        existing = db.scalar(select(Account).where(Account.email == email))
+        if existing:
+            raise HTTPException(status_code=409, detail="الحساب موجود")
+        account = Account(id=secrets.token_urlsafe(24), email=email)
+        db.add(account)
+        db.commit()
+    return {"account_id": account.id, "email": account.email}
