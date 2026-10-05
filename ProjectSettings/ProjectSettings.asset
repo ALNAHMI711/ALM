@@ -1,0 +1,28 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!129 &1
+PlayerSettings:
+  productGUID: 5d2a8e6f4b1c3d7e9a0f1234567890ab
+  AndroidProfiler: 0
+  AndroidFilterTouchesWhenObscured: 0
+  AndroidEnableSustainedPerformanceMode: 0
+  defaultScreenOrientation: 3
+  useAnimatedAutorotation: 1
+  allowedAutorotateToPortrait: 1
+  allowedAutorotateToPortraitUpsideDown: 1
+  allowedAutorotateToLandscapeRight: 1
+  allowedAutorotateToLandscapeLeft: 1
+  companyName: ALNAHMI711
+  productName: Yemen Open World
+  defaultIsNativeResolution: 1
+  useOSAutorotation: 1
+  bundleVersion: 0.1.0
+  AndroidBundleVersionCode: 1
+  AndroidMinSdkVersion: 22
+  AndroidTargetSdkVersion: 35
+  scriptingBackend:
+    Android: 1
+  apiCompatibilityLevelPerPlatform: {}
+  activeInputHandler: 0
+  applicationIdentifier:
+    Android: com.alnahmi711.yow
