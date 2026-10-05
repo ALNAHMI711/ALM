@@ -258,6 +258,14 @@ def register_account(payload: RegisterRequest):
     return {"account_id": account.id, "email": account.email}
 
 
+def session_account(session_id: str) -> str:
+    with Session(engine) as db:
+        session = db.get(AccessSession, session_id)
+    if session is None or not session.active:
+        raise HTTPException(status_code=401, detail="جلسة غير صالحة")
+    return session.account_id
+
+
 class LoginRequest(BaseModel):
     email: str = Field(min_length=3, max_length=320)
     password: str = Field(min_length=12, max_length=256)
