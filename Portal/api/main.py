@@ -64,6 +64,11 @@ class Device(Base):
 Base.metadata.create_all(engine)
 
 app = FastAPI(title="YOW Content & Commerce API", version="0.2.0")
+
+@app.get("/v1/products")
+def products():
+    return {"products": [{"id": "yow-core", "name": "YOW Core", "version": "0.1.0", "platform": "android"}]}
+
 app.mount("/web", StaticFiles(directory="Portal/web", html=True), name="web")
 
 
