@@ -14,6 +14,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 from fastapi.staticfiles import StaticFiles
 
 from auth_routes import normalize_email, is_valid_account_id
+from passwords import hash_password, verify_password
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./yow.db")
 SECRET = os.getenv("ENTITLEMENT_SIGNING_SECRET", "")
@@ -34,6 +35,7 @@ class Account(Base):
     __tablename__ = "accounts"
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+    password_hash: Mapped[str] = mapped_column(String(512))
 
 
 class AccessSession(Base):
