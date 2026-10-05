@@ -241,7 +241,10 @@ class RegisterRequest(BaseModel):
 
 @app.post("/v1/accounts/register")
 def register_account(payload: RegisterRequest):
-    email = payload.email.strip().lower()
+    try:
+        email = normalize_email(payload.email)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="بريد إلكتروني غير صالح")
     with Session(engine) as db:
         existing = db.scalar(select(Account).where(Account.email == email))
         if existing:
