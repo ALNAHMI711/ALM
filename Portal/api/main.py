@@ -216,7 +216,19 @@ def payment_webhook(
 
 
 @app.post("/v1/download-token")
-def download_token(account_id: str, product_id: str, device_id: str):
+def download_token(
+    account_id: str,
+    product_id: str,
+    device_id: str,
+    x_session_id: str | None = Header(default=None),
+):
+    if not x_session_id:
+        raise HTTPException(status_code=401, detail="جلسة مطلوبة")
+
+    authenticated_account_id = session_account(x_session_id)
+    if authenticated_account_id != account_id:
+        raise HTTPException(status_code=403, detail="الحساب لا يطابق الجلسة")
+
     with Session(engine) as db:
         entitlement = db.scalar(
             select(Entitlement).where(
