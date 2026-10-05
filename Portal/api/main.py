@@ -286,3 +286,14 @@ def account_profile(account_id: str):
     if account is None:
         raise HTTPException(status_code=404, detail="الحساب غير موجود")
     return {"account_id": account.id, "email": account.email}
+
+
+@app.post("/v1/accounts/session/revoke")
+def revoke_session(session_id: str):
+    with Session(engine) as db:
+        session = db.get(AccessSession, session_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="الجلسة غير موجودة")
+        session.active = False
+        db.commit()
+    return {"revoked": True}
