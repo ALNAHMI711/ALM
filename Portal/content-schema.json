@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "gameVersion": "0.1.0",
+  "regions": [
+    {
+      "id": "YE-SN",
+      "name": "Sana'a",
+      "enabled": true
+    }
+  ],
+  "placements": {
+    "billboards": {
+      "total": 100,
+      "sold": 0
+    },
+    "sponsoredLocations": {
+      "total": 250,
+      "sold": 0
+    }
+  },
+  "packs": [
+    {
+      "id": "world-yemen",
+      "type": "world",
+      "version": "0.1.0",
+      "sha256": "",
+      "downloadUrl": ""
+    }
+  ]
+}

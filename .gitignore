@@ -1,0 +1,30 @@
+# Unity
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+*.csproj
+*.sln
+*.suo
+*.user
+*.userprefs
+
+# Secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.p12
+*.keystore
+
+# Local portal
+__pycache__/
+.venv/
+node_modules/
+
+# Legacy binary caches
+*.tmb
+*.toc
