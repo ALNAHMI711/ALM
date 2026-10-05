@@ -258,6 +258,27 @@ def register_account(payload: RegisterRequest):
     return {"account_id": account.id, "email": account.email}
 
 
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=320)
+    password: str = Field(min_length=12, max_length=256)
+
+
+@app.post("/v1/accounts/login")
+def login(payload: LoginRequest):
+    try:
+        email = normalize_email(payload.email)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="بريد إلكتروني غير صالح")
+    with Session(engine) as db:
+        account = db.scalar(select(Account).where(Account.email == email))
+        if account is None or not verify_password(payload.password, account.password_hash):
+            raise HTTPException(status_code=401, detail="بيانات الدخول غير صحيحة")
+        session_id = secrets.token_urlsafe(32)
+        db.add(AccessSession(id=session_id, account_id=account.id, active=True))
+        db.commit()
+    return {"session_id": session_id, "account_id": account.id}
+
+
 @app.get("/v1/accounts/{account_id}")
 def account_profile(account_id: str):
     with Session(engine) as db:
