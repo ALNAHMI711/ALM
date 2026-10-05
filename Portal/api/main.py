@@ -28,6 +28,19 @@ class Base(DeclarativeBase):
     pass
 
 
+class Account(Base):
+    __tablename__ = "accounts"
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    email: Mapped[str] = mapped_column(String(320), unique=True, index=True)
+
+
+class AccessSession(Base):
+    __tablename__ = "access_sessions"
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(64), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 class Order(Base):
     __tablename__ = "orders"
     id: Mapped[str] = mapped_column(String(128), primary_key=True)
