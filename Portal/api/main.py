@@ -1,53 +1,213 @@
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel, Field
-from typing import Literal
+from __future__ import annotations
+
 import hashlib
 import hmac
 import os
 import secrets
+import time
+from typing import Literal
 
-app = FastAPI(title="YOW Content & Commerce API", version="0.1.0")
+from fastapi import FastAPI, Header, HTTPException
+from pydantic import BaseModel, Field
+from sqlalchemy import Boolean, Integer, String, create_engine, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
-SECRET = os.getenv("ENTITLEMENT_SIGNING_SECRET", "CHANGE_ME_IN_PRODUCTION").encode()
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./yow.db")
+SECRET = os.getenv("ENTITLEMENT_SIGNING_SECRET", "")
+TOKEN_TTL = 900
+
+if not SECRET:
+    # Development only. Production deployments must provide a strong secret.
+    SECRET = "development-only-change-me"
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Order(Base):
+    __tablename__ = "orders"
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(128), index=True)
+    product_id: Mapped[str] = mapped_column(String(128), index=True)
+    amount_minor: Mapped[int] = mapped_column(Integer)
+    currency: Mapped[str] = mapped_column(String(16))
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+
+
+class PaymentEvent(Base):
+    __tablename__ = "payment_events"
+    provider_event_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64))
+    order_id: Mapped[str] = mapped_column(String(128), index=True)
+    status: Mapped[str] = mapped_column(String(32))
+
+
+class Entitlement(Base):
+    __tablename__ = "entitlements"
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(128), index=True)
+    product_id: Mapped[str] = mapped_column(String(128), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class Device(Base):
+    __tablename__ = "devices"
+    id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(128), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+Base.metadata.create_all(engine)
+
+app = FastAPI(title="YOW Content & Commerce API", version="0.2.0")
+
 
 class DeviceBind(BaseModel):
     account_id: str = Field(min_length=3, max_length=128)
     device_id: str = Field(min_length=8, max_length=256)
 
+
 class PaymentWebhook(BaseModel):
     provider: str
-    provider_event_id: str
+    provider_event_id: str = Field(min_length=3, max_length=256)
     account_id: str
     order_id: str
-    amount_minor: int
-    currency: str
+    product_id: str
+    amount_minor: int = Field(ge=0)
+    currency: str = Field(min_length=3, max_length=16)
     status: Literal["paid", "failed", "refunded"]
 
-def sign_entitlement(account_id: str, product_id: str, device_id: str) -> str:
-    payload = f"{account_id}:{product_id}:{device_id}"
-    return hmac.new(SECRET, payload.encode(), hashlib.sha256).hexdigest()
+
+def sign_token(account_id: str, product_id: str, device_id: str, expires_at: int) -> str:
+    payload = f"{account_id}:{product_id}:{device_id}:{expires_at}"
+    digest = hmac.new(SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    return f"{expires_at}.{digest}"
+
+
+def verify_provider_signature(raw_body: bytes, signature: str | None) -> bool:
+    expected = hmac.new(
+        os.getenv("PAYMENT_WEBHOOK_SECRET", SECRET).encode(),
+        raw_body,
+        hashlib.sha256,
+    ).hexdigest()
+    return bool(signature) and hmac.compare_digest(signature, expected)
+
 
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "yow-portal"}
+    return {"ok": True, "service": "yow-portal", "version": app.version}
+
 
 @app.post("/v1/devices/bind")
 def bind_device(req: DeviceBind):
-    # Production: read an existing paid entitlement from PostgreSQL.
-    # Do not grant access merely because this endpoint was called.
-    return {"account_id": req.account_id, "device_id": req.device_id, "status": "pending_entitlement"}
+    with Session(engine) as db:
+        entitlement = db.scalar(
+            select(Entitlement).where(
+                Entitlement.account_id == req.account_id,
+                Entitlement.active.is_(True),
+            )
+        )
+        if entitlement is None:
+            raise HTTPException(status_code=403, detail="active entitlement required")
+
+        device = db.get(Device, req.device_id)
+        if device is None:
+            device = Device(id=req.device_id, account_id=req.account_id, active=True)
+            db.add(device)
+        elif device.account_id != req.account_id or not device.active:
+            raise HTTPException(status_code=403, detail="device not available")
+        db.commit()
+    return {"account_id": req.account_id, "device_id": req.device_id, "status": "bound"}
+
 
 @app.post("/v1/payments/webhook")
-def payment_webhook(event: PaymentWebhook):
-    # Production: verify provider signature before accepting this request.
-    # The webhook must be idempotent on provider_event_id.
-    if event.status != "paid":
-        return {"accepted": True, "entitlement_granted": False}
-    return {"accepted": True, "entitlement_granted": True, "order_id": event.order_id}
+def payment_webhook(
+    event: PaymentWebhook,
+    x_provider_signature: str | None = Header(default=None),
+):
+    # The provider signature is mandatory in production. JSON serialization
+    # differences mean production adapters should verify the exact raw body.
+    if os.getenv("PAYMENT_WEBHOOK_SECRET") and not x_provider_signature:
+        raise HTTPException(status_code=401, detail="missing provider signature")
+
+    with Session(engine) as db:
+        if db.get(PaymentEvent, event.provider_event_id):
+            return {"accepted": True, "idempotent": True}
+
+        db.add(
+            PaymentEvent(
+                provider_event_id=event.provider_event_id,
+                provider=event.provider,
+                order_id=event.order_id,
+                status=event.status,
+            )
+        )
+        order = db.get(Order, event.order_id)
+        if order is None:
+            order = Order(
+                id=event.order_id,
+                account_id=event.account_id,
+                product_id=event.product_id,
+                amount_minor=event.amount_minor,
+                currency=event.currency,
+                status=event.status,
+            )
+            db.add(order)
+        else:
+            order.status = event.status
+
+        if event.status == "paid":
+            existing = db.scalar(
+                select(Entitlement).where(
+                    Entitlement.account_id == event.account_id,
+                    Entitlement.product_id == event.product_id,
+                )
+            )
+            if existing is None:
+                db.add(
+                    Entitlement(
+                        id=secrets.token_urlsafe(18),
+                        account_id=event.account_id,
+                        product_id=event.product_id,
+                        active=True,
+                    )
+                )
+            else:
+                existing.active = True
+        elif event.status == "refunded":
+            existing = db.scalar(
+                select(Entitlement).where(
+                    Entitlement.account_id == event.account_id,
+                    Entitlement.product_id == event.product_id,
+                )
+            )
+            if existing:
+                existing.active = False
+        db.commit()
+
+    return {"accepted": True, "entitlement_granted": event.status == "paid"}
+
 
 @app.post("/v1/download-token")
 def download_token(account_id: str, product_id: str, device_id: str):
-    # Production: query entitlement(account_id, product_id), device status,
-    # refund state, release state and rate limits before issuing a token.
-    token = sign_entitlement(account_id, product_id, device_id)
-    return {"token": token, "expires_in": 900, "product_id": product_id}
+    with Session(engine) as db:
+        entitlement = db.scalar(
+            select(Entitlement).where(
+                Entitlement.account_id == account_id,
+                Entitlement.product_id == product_id,
+                Entitlement.active.is_(True),
+            )
+        )
+        device = db.get(Device, device_id)
+
+    if entitlement is None:
+        raise HTTPException(status_code=403, detail="active entitlement required")
+    if device is None or device.account_id != account_id or not device.active:
+        raise HTTPException(status_code=403, detail="bound device required")
+
+    expires_at = int(time.time()) + TOKEN_TTL
+    token = sign_token(account_id, product_id, device_id, expires_at)
+    return {"token": token, "expires_in": TOKEN_TTL, "product_id": product_id}
