@@ -248,3 +248,12 @@ def register_account(payload: RegisterRequest):
         db.add(account)
         db.commit()
     return {"account_id": account.id, "email": account.email}
+
+
+@app.get("/v1/accounts/{account_id}")
+def account_profile(account_id: str):
+    with Session(engine) as db:
+        account = db.get(Account, account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="الحساب غير موجود")
+    return {"account_id": account.id, "email": account.email}
