@@ -15,6 +15,8 @@ class ProductArtifact:
     platform: str
     version: str
     storage_key: str
+    name: str = ""
+    kind: str = "game"
 
     @property
     def storage_url(self) -> str:
@@ -28,6 +30,10 @@ class ProductArtifactRegistry:
 
     def get(self, product_id: str) -> ProductArtifact | None:
         return self._artifacts.get(product_id)
+
+    def all(self) -> tuple[ProductArtifact, ...]:
+        """Return the approved catalog in deterministic product-id order."""
+        return tuple(self._artifacts[key] for key in sorted(self._artifacts))
 
     def add(self, artifact: ProductArtifact) -> None:
         if not artifact.product_id or not artifact.storage_key:
