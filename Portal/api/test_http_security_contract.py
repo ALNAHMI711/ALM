@@ -66,3 +66,11 @@ def test_products_endpoint_exposes_release_metadata():
     source = MAIN.read_text(encoding="utf-8")
     route = source[source.index('@app.get("/v1/products")'):source.index('WEB_DIR =')]
     assert '"release_id": item.release_id or None' in route
+
+def test_content_download_routes_use_manifest_and_token():
+    source = MAIN.read_text(encoding="utf-8")
+    assert '@app.post("/v1/content-download-token")' in source
+    assert '@app.get("/v1/content-download")' in source
+    assert 'CONTENT_MANIFEST.get("yow-core", pack_id, version)' in source
+    assert 'release.artifact_key' in source
+    assert 'x_content_download_token' in source
