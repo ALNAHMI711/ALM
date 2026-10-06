@@ -19,11 +19,12 @@ from passwords import hash_password, verify_password
 from payment_webhook_service import WebhookValidationError, parse_signed_webhook
 from session_service import get_session_account
 from download_service import DownloadServiceError, authorize_download, Artifact
+from product_artifacts import ProductArtifact, ProductArtifactRegistry
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./yow.db")
 SECRET = os.getenv("ENTITLEMENT_SIGNING_SECRET", "")
 TOKEN_TTL = 900
-ARTIFACT_URLS = {"yow-core": os.getenv("YOW_CORE_ARTIFACT_URL", "")}
+ARTIFACT_REGISTRY = ProductArtifactRegistry((ProductArtifact(product_id="yow-core", platform="android", version="0.1.0", storage_url=os.getenv("YOW_CORE_ARTIFACT_URL", "")),))
 
 if not SECRET:
     SECRET = "development-only-change-me"
@@ -184,14 +185,17 @@ async def payment_webhook(
 
         order = db.get(Order, event.order_id)
         if order is None:
-            db.add(Order(
+            if event.status == "refunded":
+                raise HTTPException(status_code=409, detail="refund requires an existing order")
+            order = Order(
                 id=event.order_id,
                 account_id=event.account_id,
                 product_id=event.product_id,
                 amount_minor=event.amount_minor,
                 currency=event.currency,
                 status=event.status,
-            ))
+            )
+            db.add(order)
         else:
             if (
                 order.account_id != event.account_id
@@ -203,9 +207,6 @@ async def payment_webhook(
             if order.status == "refunded" and event.status == "paid":
                 raise HTTPException(status_code=409, detail="refunded order cannot be reopened by webhook")
             order.status = event.status
-
-        if event.status == "refunded" and order is None:
-            raise HTTPException(status_code=409, detail="refund requires an existing order")
 
         existing = db.scalar(
             select(Entitlement).where(
@@ -266,6 +267,59 @@ def download_token(
         "expires_in": TOKEN_TTL,
         "product_id": product_id,
     }
+
+
+@app.get("/v1/download")
+def download(
+    account_id: str,
+    product_id: str,
+    device_id: str,
+    x_download_token: str | None = Header(default=None),
+    x_session_id: str | None = Header(default=None),
+):
+    if not x_session_id:
+        raise HTTPException(status_code=401, detail="جلسة مطلوبة")
+    if not x_download_token:
+        raise HTTPException(status_code=401, detail="download token required")
+
+    with Session(engine) as db:
+        authenticated = get_session_account(db, AccessSession, x_session_id)
+        if authenticated is None:
+            raise HTTPException(status_code=401, detail="جلسة غير صالحة")
+        if authenticated != account_id:
+            raise HTTPException(status_code=403, detail="الحساب لا يطابق الجلسة")
+
+        entitlement = db.scalar(select(Entitlement).where(
+            Entitlement.account_id == account_id,
+            Entitlement.product_id == product_id,
+            Entitlement.active.is_(True),
+        ))
+        device = db.get(Device, device_id)
+
+    registered = ARTIFACT_REGISTRY.get(product_id)
+    artifact = (
+        Artifact(product_id=registered.product_id, storage_url=registered.storage_url)
+        if registered is not None and registered.storage_url
+        else None
+    )
+    try:
+        authorized = authorize_download(
+            token=x_download_token,
+            account_id=account_id,
+            product_id=product_id,
+            device_id=device_id,
+            signing_secret=SECRET,
+            entitlement_active=entitlement is not None,
+            device_owner=device.account_id if device else None,
+            device_active=device.active if device else False,
+            artifact=artifact,
+        )
+    except DownloadServiceError as exc:
+        if str(exc) == "paid artifact unavailable":
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    return {"product_id": authorized.product_id, "download_url": authorized.storage_url, "expires_in": TOKEN_TTL}
 
 
 class RegisterRequest(BaseModel):
