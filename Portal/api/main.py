@@ -20,13 +20,24 @@ from payment_webhook_service import WebhookValidationError, parse_signed_webhook
 from session_service import get_session_account
 from download_service import DownloadServiceError, authorize_download, Artifact
 from product_artifacts import ProductArtifact, ProductArtifactRegistry
+from storage_signer import HmacStorageSigner
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./yow.db")
 SECRET = os.getenv("ENTITLEMENT_SIGNING_SECRET", "")
 TOKEN_TTL = 900
-ARTIFACT_REGISTRY = ProductArtifactRegistry((ProductArtifact(product_id="yow-core", platform="android", version="0.1.0", storage_url=os.getenv("YOW_CORE_ARTIFACT_URL", "")),))
-# Compatibility metadata only; download authorization resolves artifacts through ARTIFACT_REGISTRY.
-ARTIFACT_URLS = {"yow-core": os.getenv("YOW_CORE_ARTIFACT_URL", "")}
+STORAGE_URL_TTL = 300
+ARTIFACT_REGISTRY = ProductArtifactRegistry((
+    ProductArtifact(
+        product_id="yow-core",
+        platform="android",
+        version="0.1.0",
+        storage_key=os.getenv("YOW_CORE_ARTIFACT_KEY", ""),
+    ),
+))
+STORAGE_SIGNER = HmacStorageSigner(
+    base_url=os.getenv("YOW_STORAGE_GATEWAY_URL", ""),
+    secret=os.getenv("STORAGE_SIGNING_SECRET", ""),
+)
 
 if not SECRET:
     SECRET = "development-only-change-me"
@@ -300,8 +311,8 @@ def download(
 
     registered = ARTIFACT_REGISTRY.get(product_id)
     artifact = (
-        Artifact(product_id=registered.product_id, storage_url=registered.storage_url)
-        if registered is not None and registered.storage_url
+        Artifact(product_id=registered.product_id, storage_key=registered.storage_key)
+        if registered is not None and registered.storage_key
         else None
     )
     try:
@@ -315,13 +326,19 @@ def download(
             device_owner=device.account_id if device else None,
             device_active=device.active if device else False,
             artifact=artifact,
+            storage_signer=STORAGE_SIGNER,
+            storage_url_ttl=STORAGE_URL_TTL,
         )
     except DownloadServiceError as exc:
-        if str(exc) == "paid artifact unavailable":
+        if str(exc) in {"paid artifact unavailable", "signed artifact unavailable"}:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         raise HTTPException(status_code=403, detail=str(exc)) from exc
 
-    return {"product_id": authorized.product_id, "download_url": authorized.storage_url, "expires_in": TOKEN_TTL}
+    return {
+        "product_id": product_id,
+        "download_url": authorized.url,
+        "expires_in": max(0, authorized.expires_at - int(time.time())),
+    }
 
 
 class RegisterRequest(BaseModel):
