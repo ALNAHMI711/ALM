@@ -14,7 +14,12 @@ class ProductArtifact:
     product_id: str
     platform: str
     version: str
-    storage_url: str
+    storage_key: str
+
+    @property
+    def storage_url(self) -> str:
+        """Compatibility accessor; paid routes must never return this field."""
+        return self.storage_key
 
 
 class ProductArtifactRegistry:
@@ -25,6 +30,6 @@ class ProductArtifactRegistry:
         return self._artifacts.get(product_id)
 
     def add(self, artifact: ProductArtifact) -> None:
-        if not artifact.product_id or not artifact.storage_url:
+        if not artifact.product_id or not artifact.storage_key:
             raise ValueError("invalid artifact")
         self._artifacts[artifact.product_id] = artifact
