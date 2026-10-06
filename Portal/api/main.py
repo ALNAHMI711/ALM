@@ -22,6 +22,7 @@ from download_service import DownloadServiceError, authorize_download, Artifact
 from product_artifacts import ProductArtifact, ProductArtifactRegistry
 from storage_signer import HmacStorageSigner
 from content_manifest import ContentManifestRegistry
+from content_download_authorization import ContentDownloadAuthorizationError, sign_content_token, verify_content_token
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./yow.db")
 SECRET = os.getenv("ENTITLEMENT_SIGNING_SECRET", "")
@@ -132,6 +133,90 @@ def products():
             for item in ARTIFACT_REGISTRY.all()
         ]
     }
+@app.post("/v1/content-download-token")
+def content_download_token(
+    account_id: str,
+    device_id: str,
+    pack_id: str,
+    version: str,
+    x_session_id: str | None = Header(default=None),
+):
+    if not x_session_id:
+        raise HTTPException(status_code=401, detail="جلسة مطلوبة")
+    with Session(engine) as db:
+        authenticated = get_session_account(db, AccessSession, x_session_id)
+        if authenticated is None:
+            raise HTTPException(status_code=401, detail="جلسة غير صالحة")
+        if authenticated != account_id:
+            raise HTTPException(status_code=403, detail="الحساب لا يطابق الجلسة")
+        entitlement = db.scalar(select(Entitlement).where(
+            Entitlement.account_id == account_id, Entitlement.product_id == "yow-core",
+            Entitlement.active.is_(True),
+        ))
+        device = db.get(Device, device_id)
+        binding = db.scalar(select(DeviceProductBinding).where(
+            DeviceProductBinding.device_id == device_id, DeviceProductBinding.product_id == "yow-core",
+            DeviceProductBinding.active.is_(True),
+        ))
+    release = CONTENT_MANIFEST.get("yow-core", pack_id, version)
+    if entitlement is None or device is None or device.account_id != account_id or not device.active or binding is None:
+        raise HTTPException(status_code=403, detail="active entitlement and bound device required")
+    if release is None:
+        raise HTTPException(status_code=404, detail="content pack release unavailable")
+    expires_at = int(time.time()) + TOKEN_TTL
+    return {
+        "token": sign_content_token(account_id, "yow-core", device_id, pack_id, version, expires_at, SECRET),
+        "expires_in": TOKEN_TTL,
+        "pack_id": pack_id,
+        "version": version,
+    }
+
+
+@app.get("/v1/content-download")
+def content_download(
+    account_id: str,
+    device_id: str,
+    pack_id: str,
+    version: str,
+    x_content_download_token: str | None = Header(default=None),
+    x_session_id: str | None = Header(default=None),
+):
+    if not x_session_id or not x_content_download_token:
+        raise HTTPException(status_code=401, detail="جلسة وcontent token مطلوبان")
+    with Session(engine) as db:
+        authenticated = get_session_account(db, AccessSession, x_session_id)
+        entitlement = db.scalar(select(Entitlement).where(
+            Entitlement.account_id == account_id, Entitlement.product_id == "yow-core",
+            Entitlement.active.is_(True),
+        ))
+        device = db.get(Device, device_id)
+        binding = db.scalar(select(DeviceProductBinding).where(
+            DeviceProductBinding.device_id == device_id, DeviceProductBinding.product_id == "yow-core",
+            DeviceProductBinding.active.is_(True),
+        ))
+    if authenticated != account_id or entitlement is None or device is None or device.account_id != account_id or not device.active or binding is None:
+        raise HTTPException(status_code=403, detail="active entitlement and bound device required")
+    release = CONTENT_MANIFEST.get("yow-core", pack_id, version)
+    if release is None:
+        raise HTTPException(status_code=404, detail="content pack release unavailable")
+    try:
+        verify_content_token(x_content_download_token, account_id, "yow-core", device_id, pack_id, version, SECRET)
+    except ContentDownloadAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    try:
+        signed = STORAGE_SIGNER.sign(artifact_key=release.artifact_key, expires_in=STORAGE_URL_TTL)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="signed content pack unavailable") from exc
+    return {
+        "pack_id": pack_id,
+        "version": version,
+        "sha256": release.sha256,
+        "size_bytes": release.size_bytes,
+        "download_url": signed.url,
+        "expires_in": max(0, signed.expires_at - int(time.time())),
+    }
+
+
 
 @app.get("/v1/content-manifest")
 def content_manifest(
