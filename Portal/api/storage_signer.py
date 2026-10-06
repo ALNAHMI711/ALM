@@ -16,6 +16,9 @@ from urllib.parse import quote, urlencode
 from pathlib import PurePosixPath
 
 
+MAX_STORAGE_URL_TTL = 3600
+
+
 class StorageSigningError(ValueError):
     """Raised when an artifact cannot receive a signed download URL."""
 
@@ -51,7 +54,7 @@ class HmacStorageSigner(StorageSigner):
         key_path = PurePosixPath(artifact_key)
         if key_path.is_absolute() or ".." in key_path.parts:
             raise StorageSigningError("invalid artifact key")
-        if expires_in <= 0 or not self.secret:
+        if expires_in <= 0 or expires_in > MAX_STORAGE_URL_TTL or not self.secret:
             raise StorageSigningError("invalid storage signing configuration")
 
         expires_at = int(time.time()) if now is None else int(now)
