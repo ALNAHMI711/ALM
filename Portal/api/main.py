@@ -32,6 +32,8 @@ ARTIFACT_REGISTRY = ProductArtifactRegistry((
         platform="android",
         version="0.1.0",
         storage_key=os.getenv("YOW_CORE_ARTIFACT_KEY", ""),
+        name="YOW Core",
+        kind="game",
     ),
 ))
 STORAGE_SIGNER = HmacStorageSigner(
@@ -114,7 +116,19 @@ app = FastAPI(title="YOW Content & Commerce API", version="0.3.0")
 
 @app.get("/v1/products")
 def products():
-    return {"products": [{"id": "yow-core", "name": "YOW Core", "version": "0.1.0", "platform": "android"}]}
+    return {
+        "products": [
+            {
+                "id": item.product_id,
+                "name": item.name or item.product_id,
+                "version": item.version,
+                "platform": item.platform,
+                "kind": item.kind,
+                "available": bool(item.storage_key),
+            }
+            for item in ARTIFACT_REGISTRY.all()
+        ]
+    }
 
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
