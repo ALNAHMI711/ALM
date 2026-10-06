@@ -125,6 +125,7 @@ def products():
                 "platform": item.platform,
                 "kind": item.kind,
                 "available": bool(item.storage_key),
+                "release_id": item.release_id or None,
             }
             for item in ARTIFACT_REGISTRY.all()
         ]
