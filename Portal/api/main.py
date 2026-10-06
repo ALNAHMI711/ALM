@@ -193,7 +193,19 @@ async def payment_webhook(
                 status=event.status,
             ))
         else:
+            if (
+                order.account_id != event.account_id
+                or order.product_id != event.product_id
+                or order.amount_minor != event.amount_minor
+                or order.currency != event.currency
+            ):
+                raise HTTPException(status_code=409, detail="webhook does not match existing order")
+            if order.status == "refunded" and event.status == "paid":
+                raise HTTPException(status_code=409, detail="refunded order cannot be reopened by webhook")
             order.status = event.status
+
+        if event.status == "refunded" and order is None:
+            raise HTTPException(status_code=409, detail="refund requires an existing order")
 
         existing = db.scalar(
             select(Entitlement).where(
