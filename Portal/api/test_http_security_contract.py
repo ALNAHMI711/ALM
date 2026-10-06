@@ -28,3 +28,18 @@ def test_webhook_requires_configured_secret():
     source = MAIN.read_text(encoding="utf-8")
     assert 'if not secret:' in source
     assert 'status_code=503' in source
+
+
+def test_paid_download_route_requires_session_and_download_token():
+    source = MAIN.read_text(encoding="utf-8")
+    assert 'def download(' in source
+    assert 'x_download_token: str | None = Header' in source
+    assert 'x_session_id: str | None = Header' in source
+    assert 'authorize_download(' in source
+
+
+def test_paid_download_route_does_not_accept_client_storage_url():
+    source = MAIN.read_text(encoding="utf-8")
+    route = source[source.index('@app.get("/v1/download")'):source.index('class RegisterRequest')]
+    assert 'storage_url:' not in route
+    assert 'ARTIFACT_URLS.get(product_id' in route
