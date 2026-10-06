@@ -113,6 +113,7 @@ app.mount("/web", StaticFiles(directory=WEB_DIR, html=True), name="web")
 class DeviceBind(BaseModel):
     account_id: str = Field(min_length=3, max_length=128)
     device_id: str = Field(min_length=8, max_length=256)
+    product_id: str = Field(min_length=3, max_length=128)
 
 
 class PaymentWebhook(BaseModel):
@@ -152,6 +153,7 @@ def bind_device(req: DeviceBind, x_session_id: str | None = Header(default=None)
         entitlement = db.scalar(
             select(Entitlement).where(
                 Entitlement.account_id == req.account_id,
+                Entitlement.product_id == req.product_id,
                 Entitlement.active.is_(True),
             )
         )
@@ -162,10 +164,44 @@ def bind_device(req: DeviceBind, x_session_id: str | None = Header(default=None)
         if device is None:
             device = Device(id=req.device_id, account_id=req.account_id, active=True)
             db.add(device)
-        elif device.account_id != req.account_id or not device.active:
+        elif device.account_id != req.account_id:
             raise HTTPException(status_code=403, detail="device not available")
+        elif not device.active:
+            device.active = True
         db.commit()
-    return {"account_id": req.account_id, "device_id": req.device_id, "status": "bound"}
+    return {"account_id": req.account_id, "product_id": req.product_id, "device_id": req.device_id, "status": "bound"}
+
+
+@app.get("/v1/devices")
+def list_devices(account_id: str, x_session_id: str | None = Header(default=None)):
+    if not x_session_id:
+        raise HTTPException(status_code=401, detail="جلسة مطلوبة")
+    with Session(engine) as db:
+        authenticated = get_session_account(db, AccessSession, x_session_id)
+        if authenticated is None:
+            raise HTTPException(status_code=401, detail="جلسة غير صالحة")
+        if authenticated != account_id:
+            raise HTTPException(status_code=403, detail="الحساب لا يطابق الجلسة")
+        devices = db.scalars(select(Device).where(Device.account_id == account_id).order_by(Device.id)).all()
+    return {"devices": [{"device_id": item.id, "active": item.active} for item in devices]}
+
+
+@app.post("/v1/devices/revoke")
+def revoke_device(account_id: str, device_id: str, x_session_id: str | None = Header(default=None)):
+    if not x_session_id:
+        raise HTTPException(status_code=401, detail="جلسة مطلوبة")
+    with Session(engine) as db:
+        authenticated = get_session_account(db, AccessSession, x_session_id)
+        if authenticated is None:
+            raise HTTPException(status_code=401, detail="جلسة غير صالحة")
+        if authenticated != account_id:
+            raise HTTPException(status_code=403, detail="الحساب لا يطابق الجلسة")
+        device = db.get(Device, device_id)
+        if device is None or device.account_id != account_id:
+            raise HTTPException(status_code=404, detail="الجهاز غير موجود")
+        device.active = False
+        db.commit()
+    return {"account_id": account_id, "device_id": device_id, "revoked": True}
 
 
 @app.post("/v1/payments/webhook")
