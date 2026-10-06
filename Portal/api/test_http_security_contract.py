@@ -43,3 +43,12 @@ def test_paid_download_route_does_not_accept_client_storage_url():
     route = source[source.index('@app.get("/v1/download")'):source.index('class RegisterRequest')]
     assert 'storage_url:' not in route
     assert 'ARTIFACT_REGISTRY.get(product_id)' in route
+
+
+def test_download_routes_require_active_product_device_binding():
+    source = MAIN.read_text(encoding="utf-8")
+    token_route = source[source.index('@app.post("/v1/download-token")'):source.index('@app.get("/v1/download")')]
+    download_route = source[source.index('@app.get("/v1/download")'):source.index('class RegisterRequest')]
+    assert "DeviceProductBinding" in token_route
+    assert "DeviceProductBinding" in download_route
+    assert "binding is None" in token_route
