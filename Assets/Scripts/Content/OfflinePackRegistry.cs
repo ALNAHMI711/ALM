@@ -81,6 +81,44 @@ namespace YOW.Content
             }
         }
 
+        public void Revalidate(string contentDirectory)
+        {
+            var invalid = new List<string>();
+            foreach (var pair in installed)
+            {
+                var pack = pair.Value;
+                if (pack == null || string.IsNullOrWhiteSpace(pack.version) || string.IsNullOrWhiteSpace(pack.sha256))
+                {
+                    invalid.Add(pair.Key);
+                    continue;
+                }
+
+                var path = System.IO.Path.Combine(contentDirectory, pack.id + "-" + pack.version + ".pack");
+                if (!System.IO.File.Exists(path))
+                {
+                    invalid.Add(pair.Key);
+                    continue;
+                }
+
+                try
+                {
+                    var data = System.IO.File.ReadAllBytes(path);
+                    if ((pack.sizeBytes > 0 && data.LongLength != pack.sizeBytes) || !PackIntegrity.VerifySha256(data, pack.sha256))
+                        invalid.Add(pair.Key);
+                }
+                catch (IOException)
+                {
+                    invalid.Add(pair.Key);
+                }
+            }
+
+            foreach (var packId in invalid)
+                installed.Remove(packId);
+
+            if (invalid.Count > 0)
+                Save();
+        }
+
         private void Load()
         {
             installed.Clear();
@@ -105,6 +143,8 @@ namespace YOW.Content
                 installed.Clear();
             }
         }
+
+        public string ContentDirectory => System.IO.Path.Combine(Application.persistentDataPath, "content");
 
         private void Save()
         {
