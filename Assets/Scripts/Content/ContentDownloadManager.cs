@@ -42,6 +42,9 @@ namespace YOW.Content
             if (required == null || registry == null || string.IsNullOrWhiteSpace(portalBaseUrl))
                 return false;
 
+            if (!Uri.TryCreate(portalBaseUrl, UriKind.Absolute, out var portalUri) || portalUri.Scheme != Uri.UriSchemeHttps)
+                return false;
+
             if (registry.IsCurrent(required))
                 return true;
 
@@ -103,6 +106,9 @@ namespace YOW.Content
                 || !string.Equals(metadata.pack_id, required.id, StringComparison.OrdinalIgnoreCase)
                 || !string.Equals(metadata.version, required.version, StringComparison.OrdinalIgnoreCase)
                 || !string.Equals(metadata.sha256, required.sha256, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            if (!Uri.TryCreate(metadata.download_url, UriKind.Absolute, out var signedUri) || signedUri.Scheme != Uri.UriSchemeHttps)
                 return false;
 
             var dataRequest = UnityWebRequest.Get(metadata.download_url);
