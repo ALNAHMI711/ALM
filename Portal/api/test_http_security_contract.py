@@ -60,3 +60,9 @@ def test_products_endpoint_reads_registry_metadata():
     assert "ARTIFACT_REGISTRY.all()" in route
     assert '"kind": item.kind' in route
     assert '"available": bool(item.storage_key)' in route
+
+
+def test_products_endpoint_exposes_release_metadata():
+    source = MAIN.read_text(encoding="utf-8")
+    route = source[source.index('@app.get("/v1/products")'):source.index('WEB_DIR =')]
+    assert '"release_id": item.release_id or None' in route
