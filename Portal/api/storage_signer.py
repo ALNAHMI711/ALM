@@ -13,6 +13,7 @@ import hmac
 import time
 from dataclasses import dataclass
 from urllib.parse import quote, urlencode
+from pathlib import PurePosixPath
 
 
 class StorageSigningError(ValueError):
@@ -47,6 +48,9 @@ class HmacStorageSigner(StorageSigner):
     def sign(self, *, artifact_key: str, expires_in: int, now: int | None = None) -> SignedStorageUrl:
         if not self.base_url.startswith("https://") or not artifact_key:
             raise StorageSigningError("storage signer is not configured")
+        key_path = PurePosixPath(artifact_key)
+        if key_path.is_absolute() or ".." in key_path.parts:
+            raise StorageSigningError("invalid artifact key")
         if expires_in <= 0 or not self.secret:
             raise StorageSigningError("invalid storage signing configuration")
 
