@@ -282,3 +282,50 @@ def test_http_webhook_rejects_refund_without_existing_order(monkeypatch, tmp_pat
         headers={"X-Provider-Signature": signature},
     )
     assert response.status_code == 409
+
+
+def test_http_download_denies_device_bound_only_to_another_product(monkeypatch, tmp_path):
+    db_path = tmp_path / "test-cross-product-device.sqlite3"
+    engine = create_engine(f"sqlite:///{db_path}")
+    main.Base.metadata.create_all(engine)
+    monkeypatch.setattr(main, "engine", engine)
+    monkeypatch.setattr(main, "SECRET", "test-signing-secret")
+    monkeypatch.setattr(
+        main,
+        "ARTIFACT_REGISTRY",
+        main.ProductArtifactRegistry((
+            ProductArtifact("yow-core", "android", "0.1.0", "releases/yow-core.apk"),
+            ProductArtifact("yow-expansion", "android", "0.1.0", "releases/yow-expansion.apk"),
+        )),
+    )
+    monkeypatch.setattr(main, "STORAGE_SIGNER", HmacStorageSigner("https://gateway.example", "gateway-secret"))
+
+    client = TestClient(main.app)
+    account_id = "acct-cross-product-12345678"
+    device_id = "device-cross-product-12345678"
+    session_id = "session-cross-product-12345678"
+
+    with Session(engine) as db:
+        db.add(main.Account(
+            id=account_id,
+            email="cross-product@example.com",
+            password_hash=main.hash_password("another-strong-password-123"),
+        ))
+        db.add(main.AccessSession(id=session_id, account_id=account_id, active=True))
+        db.add(main.Entitlement(id="ent-core-cross", account_id=account_id, product_id="yow-core", active=True))
+        db.add(main.Entitlement(id="ent-exp-cross", account_id=account_id, product_id="yow-expansion", active=True))
+        db.add(main.Device(id=device_id, account_id=account_id, active=True))
+        db.add(main.DeviceProductBinding(
+            id="binding-core-cross-12345678",
+            device_id=device_id,
+            product_id="yow-core",
+            active=True,
+        ))
+        db.commit()
+
+    token_response = client.post(
+        "/v1/download-token",
+        params={"account_id": account_id, "product_id": "yow-expansion", "device_id": device_id},
+        headers={"X-Session-ID": session_id},
+    )
+    assert token_response.status_code == 403
