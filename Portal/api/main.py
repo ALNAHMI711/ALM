@@ -25,6 +25,8 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./yow.db")
 SECRET = os.getenv("ENTITLEMENT_SIGNING_SECRET", "")
 TOKEN_TTL = 900
 ARTIFACT_REGISTRY = ProductArtifactRegistry((ProductArtifact(product_id="yow-core", platform="android", version="0.1.0", storage_url=os.getenv("YOW_CORE_ARTIFACT_URL", "")),))
+# Compatibility metadata only; download authorization resolves artifacts through ARTIFACT_REGISTRY.
+ARTIFACT_URLS = {"yow-core": os.getenv("YOW_CORE_ARTIFACT_URL", "")}
 
 if not SECRET:
     SECRET = "development-only-change-me"
