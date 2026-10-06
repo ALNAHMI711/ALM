@@ -77,3 +77,19 @@ def test_token_cannot_authorize_another_product():
             artifact=Artifact("different-product", "https://private.example/a"),
             now=1000,
         )
+
+
+def test_authorize_download_rejects_non_https_artifact():
+    import pytest
+    with pytest.raises(DownloadServiceError, match="artifact"):
+        authorize_download(
+            token=_token("acct-12345678", "yow-core", "device-12345678"),
+            account_id="acct-12345678",
+            product_id="yow-core",
+            device_id="device-12345678",
+            signing_secret=SECRET,
+            entitlement_active=True,
+            device_owner="acct-12345678",
+            device_active=True,
+            artifact=Artifact(product_id="yow-core", storage_url="http://storage.example/file.apk"),
+        )
