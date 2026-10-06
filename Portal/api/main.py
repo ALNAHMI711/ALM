@@ -17,10 +17,12 @@ from auth_routes import normalize_email
 from passwords import hash_password, verify_password
 from payment_webhook_service import WebhookValidationError, parse_signed_webhook
 from session_service import get_session_account
+from download_service import DownloadServiceError, authorize_download, Artifact
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./yow.db")
 SECRET = os.getenv("ENTITLEMENT_SIGNING_SECRET", "")
 TOKEN_TTL = 900
+ARTIFACT_URLS = {"yow-core": os.getenv("YOW_CORE_ARTIFACT_URL", "")}
 
 if not SECRET:
     SECRET = "development-only-change-me"
