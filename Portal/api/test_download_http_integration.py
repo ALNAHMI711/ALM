@@ -35,6 +35,7 @@ def test_http_download_enforces_session_entitlement_and_device(monkeypatch, tmp_
     with Session(engine) as db:
         db.add(main.Entitlement(id="ent-http", account_id=account_id, product_id="yow-core", active=True))
         db.add(main.Device(id=device_id, account_id=account_id, active=True))
+        db.add(main.DeviceProductBinding(id="binding-http-12345678", device_id=device_id, product_id="yow-core", active=True))
         db.commit()
 
     token_response = client.post(
@@ -86,6 +87,7 @@ def test_http_download_denies_without_artifact(monkeypatch, tmp_path):
         db.add(main.AccessSession(id=session_id, account_id=account_id, active=True))
         db.add(main.Entitlement(id="ent-no-artifact", account_id=account_id, product_id="yow-core", active=True))
         db.add(main.Device(id=device_id, account_id=account_id, active=True))
+        db.add(main.DeviceProductBinding(id="binding-no-artifact-12345678", device_id=device_id, product_id="yow-core", active=True))
         db.commit()
 
     expires = int(main.time.time()) + 300
