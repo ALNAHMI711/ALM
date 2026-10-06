@@ -45,8 +45,17 @@ namespace YOW.Core
         [SerializeField] private string manifestUrl = "";
         [SerializeField] private int requestTimeoutSeconds = 10;
 
+        private string sessionId;
+        private string accountId;
+
         public ContentManifest Current { get; private set; }
         public bool LoadedFromServer { get; private set; }
+
+        public void ConfigureAuthentication(string account, string session)
+        {
+            accountId = account ?? string.Empty;
+            sessionId = session ?? string.Empty;
+        }
 
         public async Task InitializeAsync()
         {
@@ -57,6 +66,10 @@ namespace YOW.Core
             }
 
             var request = UnityWebRequest.Get(manifestUrl);
+            if (!string.IsNullOrWhiteSpace(accountId))
+                request.SetRequestHeader("X-Account-ID", accountId);
+            if (!string.IsNullOrWhiteSpace(sessionId))
+                request.SetRequestHeader("X-Session-ID", sessionId);
             request.timeout = Mathf.Max(1, requestTimeoutSeconds);
             var operation = request.SendWebRequest();
             while (!operation.isDone)
