@@ -6,6 +6,8 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 import main
+from product_artifacts import ProductArtifact
+from storage_signer import HmacStorageSigner
 
 
 def test_http_download_enforces_session_entitlement_and_device(monkeypatch, tmp_path):
@@ -14,7 +16,8 @@ def test_http_download_enforces_session_entitlement_and_device(monkeypatch, tmp_
     main.Base.metadata.create_all(engine)
     monkeypatch.setattr(main, "engine", engine)
     monkeypatch.setattr(main, "SECRET", "test-signing-secret")
-    monkeypatch.setattr(main, "ARTIFACT_URLS", {"yow-core": "https://storage.example/yow-core.apk"})
+    monkeypatch.setattr(main, "ARTIFACT_REGISTRY", main.ProductArtifactRegistry((ProductArtifact("yow-core", "android", "0.1.0", "releases/yow-core.apk"),)))
+    monkeypatch.setattr(main, "STORAGE_SIGNER", HmacStorageSigner("https://gateway.example", "gateway-secret"))
 
     client = TestClient(main.app)
     password = "a-strong-password-123"
@@ -47,7 +50,9 @@ def test_http_download_enforces_session_entitlement_and_device(monkeypatch, tmp_
         headers={"X-Session-ID": session_id, "X-Download-Token": token_response.json()["token"]},
     )
     assert response.status_code == 200
-    assert response.json()["download_url"] == "https://storage.example/yow-core.apk"
+    assert response.json()["download_url"].startswith("https://gateway.example/releases/yow-core.apk?")
+    assert "expires=" in response.json()["download_url"]
+    assert "signature=" in response.json()["download_url"]
 
     missing_session = client.get(
         "/v1/download",
@@ -70,7 +75,7 @@ def test_http_download_denies_without_artifact(monkeypatch, tmp_path):
     main.Base.metadata.create_all(engine)
     monkeypatch.setattr(main, "engine", engine)
     monkeypatch.setattr(main, "SECRET", "test-signing-secret")
-    monkeypatch.setattr(main, "ARTIFACT_URLS", {})
+    monkeypatch.setattr(main, "ARTIFACT_REGISTRY", main.ProductArtifactRegistry())
 
     client = TestClient(main.app)
     account_id = "acct-no-artifact-12345678"
