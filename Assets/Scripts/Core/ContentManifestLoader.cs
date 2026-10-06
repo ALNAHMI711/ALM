@@ -44,6 +44,7 @@ namespace YOW.Core
     {
         [SerializeField] private string manifestUrl = "";
         [SerializeField] private int requestTimeoutSeconds = 10;
+        private const string CachedManifestKey = "YOW.ContentManifest.Cache";
 
         private string sessionId;
         private string accountId;
@@ -61,7 +62,7 @@ namespace YOW.Core
         {
             if (string.IsNullOrWhiteSpace(manifestUrl))
             {
-                SetEmptyManifest();
+                LoadCachedOrEmptyManifest();
                 return;
             }
 
@@ -77,7 +78,8 @@ namespace YOW.Core
 
             if (request.result != UnityWebRequest.Result.Success)
             {
-                SetEmptyManifest();
+                request.Dispose();
+                LoadCachedOrEmptyManifest();
                 return;
             }
 
@@ -86,10 +88,12 @@ namespace YOW.Core
                 var payload = JsonUtility.FromJson<PortalContentManifest>(request.downloadHandler.text);
                 Current = Convert(payload);
                 LoadedFromServer = true;
+                PlayerPrefs.SetString(CachedManifestKey, request.downloadHandler.text);
+                PlayerPrefs.Save();
             }
             catch (Exception)
             {
-                SetEmptyManifest();
+                LoadCachedOrEmptyManifest();
             }
             finally
             {
@@ -118,6 +122,28 @@ namespace YOW.Core
 
             var required = GetPack(packId);
             return required != null && !registry.IsCurrent(required);
+        }
+
+        private void LoadCachedOrEmptyManifest()
+        {
+            LoadedFromServer = false;
+            var cached = PlayerPrefs.GetString(CachedManifestKey, "");
+            if (!string.IsNullOrWhiteSpace(cached))
+            {
+                try
+                {
+                    var payload = JsonUtility.FromJson<PortalContentManifest>(cached);
+                    Current = Convert(payload);
+                    return;
+                }
+                catch (Exception)
+                {
+                    PlayerPrefs.DeleteKey(CachedManifestKey);
+                    PlayerPrefs.Save();
+                }
+            }
+
+            SetEmptyManifest();
         }
 
         private void SetEmptyManifest()
