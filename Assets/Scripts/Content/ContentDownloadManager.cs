@@ -128,7 +128,7 @@ namespace YOW.Content
 
             var directory = Path.Combine(Application.persistentDataPath, "content");
             Directory.CreateDirectory(directory);
-            var path = Path.Combine(directory, required.id + "-" + required.version + ".pack");
+            var path = PackStoragePaths.GetPath(directory, required.id, required.version);
             var tempPath = path + ".partial";
 
             try
