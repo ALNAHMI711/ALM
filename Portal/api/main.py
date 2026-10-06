@@ -10,7 +10,7 @@ from typing import Literal
 
 from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import Boolean, Integer, String, create_engine, select
+from sqlalchemy import Boolean, Integer, String, UniqueConstraint, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 from fastapi.staticfiles import StaticFiles
 
@@ -96,6 +96,17 @@ class Device(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
+class DeviceProductBinding(Base):
+    __tablename__ = "device_product_bindings"
+    __table_args__ = (
+        UniqueConstraint("device_id", "product_id", name="uq_device_product_binding"),
+    )
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    device_id: Mapped[str] = mapped_column(String(256), index=True)
+    product_id: Mapped[str] = mapped_column(String(128), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
 Base.metadata.create_all(engine)
 
 app = FastAPI(title="YOW Content & Commerce API", version="0.3.0")
@@ -168,6 +179,22 @@ def bind_device(req: DeviceBind, x_session_id: str | None = Header(default=None)
             raise HTTPException(status_code=403, detail="device not available")
         elif not device.active:
             device.active = True
+
+        binding = db.scalar(
+            select(DeviceProductBinding).where(
+                DeviceProductBinding.device_id == req.device_id,
+                DeviceProductBinding.product_id == req.product_id,
+            )
+        )
+        if binding is None:
+            db.add(DeviceProductBinding(
+                id=secrets.token_urlsafe(18),
+                device_id=req.device_id,
+                product_id=req.product_id,
+                active=True,
+            ))
+        else:
+            binding.active = True
         db.commit()
     return {"account_id": req.account_id, "product_id": req.product_id, "device_id": req.device_id, "status": "bound"}
 
@@ -183,7 +210,21 @@ def list_devices(account_id: str, x_session_id: str | None = Header(default=None
         if authenticated != account_id:
             raise HTTPException(status_code=403, detail="الحساب لا يطابق الجلسة")
         devices = db.scalars(select(Device).where(Device.account_id == account_id).order_by(Device.id)).all()
-    return {"devices": [{"device_id": item.id, "active": item.active} for item in devices]}
+        device_ids = [item.id for item in devices]
+        bindings = (
+            db.scalars(
+                select(DeviceProductBinding).where(
+                    DeviceProductBinding.device_id.in_(device_ids)
+                )
+            ).all()
+            if device_ids
+            else []
+        )
+        products_by_device: dict[str, list[str]] = {}
+        for binding in bindings:
+            if binding.active:
+                products_by_device.setdefault(binding.device_id, []).append(binding.product_id)
+    return {"devices": [{"device_id": item.id, "active": item.active, "products": sorted(products_by_device.get(item.id, []))} for item in devices]}
 
 
 @app.post("/v1/devices/revoke")
@@ -200,6 +241,14 @@ def revoke_device(account_id: str, device_id: str, x_session_id: str | None = He
         if device is None or device.account_id != account_id:
             raise HTTPException(status_code=404, detail="الجهاز غير موجود")
         device.active = False
+        bindings = db.scalars(
+            select(DeviceProductBinding).where(
+                DeviceProductBinding.device_id == device_id,
+                DeviceProductBinding.active.is_(True),
+            )
+        ).all()
+        for binding in bindings:
+            binding.active = False
         db.commit()
     return {"account_id": account_id, "device_id": device_id, "revoked": True}
 
@@ -304,10 +353,17 @@ def download_token(
             Entitlement.active.is_(True),
         ))
         device = db.get(Device, device_id)
+        binding = db.scalar(
+            select(DeviceProductBinding).where(
+                DeviceProductBinding.device_id == device_id,
+                DeviceProductBinding.product_id == product_id,
+                DeviceProductBinding.active.is_(True),
+            )
+        )
 
     if entitlement is None:
         raise HTTPException(status_code=403, detail="active entitlement required")
-    if device is None or device.account_id != account_id or not device.active:
+    if device is None or device.account_id != account_id or not device.active or binding is None:
         raise HTTPException(status_code=403, detail="bound device required")
 
     expires_at = int(time.time()) + TOKEN_TTL
@@ -344,6 +400,13 @@ def download(
             Entitlement.active.is_(True),
         ))
         device = db.get(Device, device_id)
+        binding = db.scalar(
+            select(DeviceProductBinding).where(
+                DeviceProductBinding.device_id == device_id,
+                DeviceProductBinding.product_id == product_id,
+                DeviceProductBinding.active.is_(True),
+            )
+        )
 
     registered = ARTIFACT_REGISTRY.get(product_id)
     artifact = (
@@ -360,7 +423,7 @@ def download(
             signing_secret=SECRET,
             entitlement_active=entitlement is not None,
             device_owner=device.account_id if device else None,
-            device_active=device.active if device else False,
+            device_active=(device.active and binding is not None) if device else False,
             artifact=artifact,
             storage_signer=STORAGE_SIGNER,
             storage_url_ttl=STORAGE_URL_TTL,
