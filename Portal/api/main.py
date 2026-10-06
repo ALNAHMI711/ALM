@@ -21,6 +21,7 @@ from session_service import get_session_account
 from download_service import DownloadServiceError, authorize_download, Artifact
 from product_artifacts import ProductArtifact, ProductArtifactRegistry
 from storage_signer import HmacStorageSigner
+from content_manifest import ContentManifestRegistry
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./yow.db")
 SECRET = os.getenv("ENTITLEMENT_SIGNING_SECRET", "")
@@ -36,6 +37,7 @@ ARTIFACT_REGISTRY = ProductArtifactRegistry((
         kind="game",
     ),
 ))
+CONTENT_MANIFEST = ContentManifestRegistry(())
 STORAGE_SIGNER = HmacStorageSigner(
     base_url=os.getenv("YOW_STORAGE_GATEWAY_URL", ""),
     secret=os.getenv("STORAGE_SIGNING_SECRET", ""),
@@ -130,6 +132,49 @@ def products():
             for item in ARTIFACT_REGISTRY.all()
         ]
     }
+
+@app.get("/v1/content-manifest")
+def content_manifest(
+    account_id: str,
+    device_id: str,
+    x_session_id: str | None = Header(default=None),
+):
+    if not x_session_id:
+        raise HTTPException(status_code=401, detail="جلسة مطلوبة")
+    with Session(engine) as db:
+        authenticated = get_session_account(db, AccessSession, x_session_id)
+        if authenticated is None:
+            raise HTTPException(status_code=401, detail="جلسة غير صالحة")
+        if authenticated != account_id:
+            raise HTTPException(status_code=403, detail="الحساب لا يطابق الجلسة")
+        entitlement = db.scalar(select(Entitlement).where(
+            Entitlement.account_id == account_id,
+            Entitlement.product_id == "yow-core",
+            Entitlement.active.is_(True),
+        ))
+        device = db.get(Device, device_id)
+        binding = db.scalar(select(DeviceProductBinding).where(
+            DeviceProductBinding.device_id == device_id,
+            DeviceProductBinding.product_id == "yow-core",
+            DeviceProductBinding.active.is_(True),
+        ))
+        if entitlement is None or device is None or device.account_id != account_id or not device.active or binding is None:
+            raise HTTPException(status_code=403, detail="active entitlement and bound device required")
+    return {
+        "product_id": "yow-core",
+        "packs": [
+            {
+                "pack_id": item.pack_id,
+                "version": item.version,
+                "platform": item.platform,
+                "sha256": item.sha256,
+                "size_bytes": item.size_bytes,
+                "required_core_version": item.required_core_version or None,
+            }
+            for item in CONTENT_MANIFEST.for_product("yow-core")
+        ],
+    }
+
 
 
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"
