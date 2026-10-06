@@ -50,7 +50,7 @@ namespace YOW.Content
 
             var tokenEndpoint = portalBaseUrl.TrimEnd('/') + "/v1/content-download-token";
             var query = "?account_id=" + UnityWebRequest.EscapeURL(accountId)
-                + "&device_id=" + UnityWebRequest.EscapeURL(SystemInfo.deviceUniqueIdentifier)
+                + "&device_id=" + UnityWebRequest.EscapeURL(InstallationIdentity.GetOrCreate())
                 + "&pack_id=" + UnityWebRequest.EscapeURL(required.id)
                 + "&version=" + UnityWebRequest.EscapeURL(required.version);
 
@@ -129,7 +129,28 @@ namespace YOW.Content
             var directory = Path.Combine(Application.persistentDataPath, "content");
             Directory.CreateDirectory(directory);
             var path = Path.Combine(directory, required.id + "-" + required.version + ".pack");
-            File.WriteAllBytes(path, data);
+            var tempPath = path + ".partial";
+
+            try
+            {
+                File.WriteAllBytes(tempPath, data);
+                var persisted = File.ReadAllBytes(tempPath);
+                if (persisted.LongLength != data.LongLength || !PackIntegrity.VerifySha256(persisted, metadata.sha256))
+                {
+                    File.Delete(tempPath);
+                    return false;
+                }
+
+                if (File.Exists(path))
+                    File.Delete(path);
+                File.Move(tempPath, path);
+            }
+            catch (IOException)
+            {
+                if (File.Exists(tempPath))
+                    File.Delete(tempPath);
+                return false;
+            }
 
             registry.MarkInstalled(new PackDescriptor
             {
