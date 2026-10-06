@@ -8,6 +8,7 @@ and active device before an artifact URL is returned.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from download_authorization import DownloadAuthorizationError, verify_download_token
 
@@ -53,5 +54,8 @@ def authorize_download(
         raise DownloadServiceError("active bound device required")
     if artifact is None or artifact.product_id != product_id or not artifact.storage_url:
         raise DownloadServiceError("paid artifact unavailable")
+    parsed = urlparse(artifact.storage_url)
+    if parsed.scheme != "https" or not parsed.netloc:
+        raise DownloadServiceError("artifact must use HTTPS")
 
     return artifact
