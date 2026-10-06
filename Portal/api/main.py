@@ -7,21 +7,22 @@ import secrets
 import time
 from typing import Literal
 
-from fastapi import FastAPI, Header, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, Header, HTTPException, Request
+from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import Boolean, Integer, String, create_engine, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 from fastapi.staticfiles import StaticFiles
 
-from auth_routes import normalize_email, is_valid_account_id
+from auth_routes import normalize_email
 from passwords import hash_password, verify_password
+from payment_webhook_service import WebhookValidationError, parse_signed_webhook
+from session_service import get_session_account
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./yow.db")
 SECRET = os.getenv("ENTITLEMENT_SIGNING_SECRET", "")
 TOKEN_TTL = 900
 
 if not SECRET:
-    # Development only. Production deployments must provide a strong secret.
     SECRET = "development-only-change-me"
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
@@ -80,11 +81,13 @@ class Device(Base):
 
 Base.metadata.create_all(engine)
 
-app = FastAPI(title="YOW Content & Commerce API", version="0.2.0")
+app = FastAPI(title="YOW Content & Commerce API", version="0.3.0")
+
 
 @app.get("/v1/products")
 def products():
     return {"products": [{"id": "yow-core", "name": "YOW Core", "version": "0.1.0", "platform": "android"}]}
+
 
 app.mount("/web", StaticFiles(directory="Portal/web", html=True), name="web")
 
@@ -111,23 +114,23 @@ def sign_token(account_id: str, product_id: str, device_id: str, expires_at: int
     return f"{expires_at}.{digest}"
 
 
-def verify_provider_signature(raw_body: bytes, signature: str | None) -> bool:
-    expected = hmac.new(
-        os.getenv("PAYMENT_WEBHOOK_SECRET", SECRET).encode(),
-        raw_body,
-        hashlib.sha256,
-    ).hexdigest()
-    return bool(signature) and hmac.compare_digest(signature, expected)
-
-
 @app.get("/health")
 def health():
     return {"ok": True, "service": "yow-portal", "version": app.version}
 
 
 @app.post("/v1/devices/bind")
-def bind_device(req: DeviceBind):
+def bind_device(req: DeviceBind, x_session_id: str | None = Header(default=None)):
+    if not x_session_id:
+        raise HTTPException(status_code=401, detail="جلسة مطلوبة")
+
     with Session(engine) as db:
+        authenticated = get_session_account(db, AccessSession, x_session_id)
+        if authenticated is None:
+            raise HTTPException(status_code=401, detail="جلسة غير صالحة")
+        if authenticated != req.account_id:
+            raise HTTPException(status_code=403, detail="الحساب لا يطابق الجلسة")
+
         entitlement = db.scalar(
             select(Entitlement).where(
                 Entitlement.account_id == req.account_id,
@@ -148,68 +151,65 @@ def bind_device(req: DeviceBind):
 
 
 @app.post("/v1/payments/webhook")
-def payment_webhook(
-    event: PaymentWebhook,
+async def payment_webhook(
+    request: Request,
     x_provider_signature: str | None = Header(default=None),
 ):
-    # The provider signature is mandatory in production. JSON serialization
-    # differences mean production adapters should verify the exact raw body.
-    if os.getenv("PAYMENT_WEBHOOK_SECRET") and not x_provider_signature:
-        raise HTTPException(status_code=401, detail="missing provider signature")
+    secret = os.getenv("PAYMENT_WEBHOOK_SECRET", "")
+    raw_body = await request.body()
+    if not secret:
+        raise HTTPException(status_code=503, detail="payment webhook secret is not configured")
+    try:
+        payload = parse_signed_webhook(raw_body, x_provider_signature, secret)
+        event = PaymentWebhook.model_validate(payload)
+    except WebhookValidationError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="invalid webhook payload") from exc
 
     with Session(engine) as db:
         if db.get(PaymentEvent, event.provider_event_id):
             return {"accepted": True, "idempotent": True}
 
-        db.add(
-            PaymentEvent(
-                provider_event_id=event.provider_event_id,
-                provider=event.provider,
-                order_id=event.order_id,
-                status=event.status,
-            )
-        )
+        db.add(PaymentEvent(
+            provider_event_id=event.provider_event_id,
+            provider=event.provider,
+            order_id=event.order_id,
+            status=event.status,
+        ))
+
         order = db.get(Order, event.order_id)
         if order is None:
-            order = Order(
+            db.add(Order(
                 id=event.order_id,
                 account_id=event.account_id,
                 product_id=event.product_id,
                 amount_minor=event.amount_minor,
                 currency=event.currency,
                 status=event.status,
-            )
-            db.add(order)
+            ))
         else:
             order.status = event.status
 
-        if event.status == "paid":
-            existing = db.scalar(
-                select(Entitlement).where(
-                    Entitlement.account_id == event.account_id,
-                    Entitlement.product_id == event.product_id,
-                )
+        existing = db.scalar(
+            select(Entitlement).where(
+                Entitlement.account_id == event.account_id,
+                Entitlement.product_id == event.product_id,
             )
+        )
+        if event.status == "paid":
             if existing is None:
-                db.add(
-                    Entitlement(
-                        id=secrets.token_urlsafe(18),
-                        account_id=event.account_id,
-                        product_id=event.product_id,
-                        active=True,
-                    )
-                )
+                db.add(Entitlement(
+                    id=secrets.token_urlsafe(18),
+                    account_id=event.account_id,
+                    product_id=event.product_id,
+                    active=True,
+                ))
             else:
                 existing.active = True
-        elif event.status == "refunded":
-            existing = db.scalar(
-                select(Entitlement).where(
-                    Entitlement.account_id == event.account_id,
-                    Entitlement.product_id == event.product_id,
-                )
-            )
-            if existing:
-                existing.active = False
+        elif event.status == "refunded" and existing:
+            existing.active = False
+
         db.commit()
 
     return {"accepted": True, "entitlement_granted": event.status == "paid"}
@@ -225,18 +225,18 @@ def download_token(
     if not x_session_id:
         raise HTTPException(status_code=401, detail="جلسة مطلوبة")
 
-    authenticated_account_id = session_account(x_session_id)
-    if authenticated_account_id != account_id:
-        raise HTTPException(status_code=403, detail="الحساب لا يطابق الجلسة")
-
     with Session(engine) as db:
-        entitlement = db.scalar(
-            select(Entitlement).where(
-                Entitlement.account_id == account_id,
-                Entitlement.product_id == product_id,
-                Entitlement.active.is_(True),
-            )
-        )
+        authenticated = get_session_account(db, AccessSession, x_session_id)
+        if authenticated is None:
+            raise HTTPException(status_code=401, detail="جلسة غير صالحة")
+        if authenticated != account_id:
+            raise HTTPException(status_code=403, detail="الحساب لا يطابق الجلسة")
+
+        entitlement = db.scalar(select(Entitlement).where(
+            Entitlement.account_id == account_id,
+            Entitlement.product_id == product_id,
+            Entitlement.active.is_(True),
+        ))
         device = db.get(Device, device_id)
 
     if entitlement is None:
@@ -245,8 +245,11 @@ def download_token(
         raise HTTPException(status_code=403, detail="bound device required")
 
     expires_at = int(time.time()) + TOKEN_TTL
-    token = sign_token(account_id, product_id, device_id, expires_at)
-    return {"token": token, "expires_in": TOKEN_TTL, "product_id": product_id}
+    return {
+        "token": sign_token(account_id, product_id, device_id, expires_at),
+        "expires_in": TOKEN_TTL,
+        "product_id": product_id,
+    }
 
 
 class RegisterRequest(BaseModel):
@@ -261,21 +264,16 @@ def register_account(payload: RegisterRequest):
     except ValueError:
         raise HTTPException(status_code=422, detail="بريد إلكتروني غير صالح")
     with Session(engine) as db:
-        existing = db.scalar(select(Account).where(Account.email == email))
-        if existing:
+        if db.scalar(select(Account).where(Account.email == email)):
             raise HTTPException(status_code=409, detail="الحساب موجود")
-        account = Account(id=secrets.token_urlsafe(24), email=email, password_hash=hash_password(payload.password))
+        account = Account(
+            id=secrets.token_urlsafe(24),
+            email=email,
+            password_hash=hash_password(payload.password),
+        )
         db.add(account)
         db.commit()
     return {"account_id": account.id, "email": account.email}
-
-
-def session_account(session_id: str) -> str:
-    with Session(engine) as db:
-        session = db.get(AccessSession, session_id)
-    if session is None or not session.active:
-        raise HTTPException(status_code=401, detail="جلسة غير صالحة")
-    return session.account_id
 
 
 class LoginRequest(BaseModel):
@@ -300,8 +298,15 @@ def login(payload: LoginRequest):
 
 
 @app.get("/v1/accounts/{account_id}")
-def account_profile(account_id: str):
+def account_profile(account_id: str, x_session_id: str | None = Header(default=None)):
+    if not x_session_id:
+        raise HTTPException(status_code=401, detail="جلسة مطلوبة")
     with Session(engine) as db:
+        authenticated = get_session_account(db, AccessSession, x_session_id)
+        if authenticated is None:
+            raise HTTPException(status_code=401, detail="جلسة غير صالحة")
+        if authenticated != account_id:
+            raise HTTPException(status_code=403, detail="الحساب لا يطابق الجلسة")
         account = db.get(Account, account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="الحساب غير موجود")
@@ -309,11 +314,18 @@ def account_profile(account_id: str):
 
 
 @app.post("/v1/accounts/session/revoke")
-def revoke_session(session_id: str):
+def revoke_session(session_id: str, x_session_id: str | None = Header(default=None)):
+    if not x_session_id:
+        raise HTTPException(status_code=401, detail="جلسة مطلوبة")
     with Session(engine) as db:
-        session = db.get(AccessSession, session_id)
-        if session is None:
+        authenticated = get_session_account(db, AccessSession, x_session_id)
+        target = db.get(AccessSession, session_id)
+        if authenticated is None:
+            raise HTTPException(status_code=401, detail="جلسة غير صالحة")
+        if target is None:
             raise HTTPException(status_code=404, detail="الجلسة غير موجودة")
-        session.active = False
+        if target.account_id != authenticated:
+            raise HTTPException(status_code=403, detail="لا يمكن إلغاء جلسة حساب آخر")
+        target.active = False
         db.commit()
     return {"revoked": True}
