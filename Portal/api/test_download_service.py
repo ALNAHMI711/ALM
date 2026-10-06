@@ -4,6 +4,10 @@ import hmac
 import pytest
 
 from download_service import Artifact, DownloadServiceError, authorize_download
+from storage_signer import HmacStorageSigner
+
+
+SECRET = "test-secret"
 
 
 def make_token(account_id, product_id, device_id, expires_at, secret):
@@ -12,78 +16,76 @@ def make_token(account_id, product_id, device_id, expires_at, secret):
     return f"{expires_at}.{digest}"
 
 
-def test_authorizes_only_active_entitlement_and_owned_device():
-    secret = "test-secret"
-    token = make_token("acct-12345678", "yow-core", "device-12345678", 2000, secret)
+def signer():
+    return HmacStorageSigner("https://gateway.example", "gateway-secret")
 
-    artifact = authorize_download(
-        token=token,
+
+def test_authorizes_only_active_entitlement_and_owned_device():
+    result = authorize_download(
+        token=make_token("acct-12345678", "yow-core", "device-12345678", 2000, SECRET),
         account_id="acct-12345678",
         product_id="yow-core",
         device_id="device-12345678",
-        signing_secret=secret,
+        signing_secret=SECRET,
         entitlement_active=True,
         device_owner="acct-12345678",
         device_active=True,
-        artifact=Artifact("yow-core", "https://private.example/artifact"),
+        artifact=Artifact("yow-core", "releases/yow-core.apk"),
+        storage_signer=signer(),
         now=1000,
     )
 
-    assert artifact.storage_url.startswith("https://")
+    assert result.url.startswith("https://gateway.example/releases/yow-core.apk?")
+    assert result.expires_at == 1300
 
 
 @pytest.mark.parametrize(
     "entitlement_active,device_owner,device_active,artifact",
     [
-        (False, "acct-12345678", True, Artifact("yow-core", "https://private.example/a")),
-        (True, "other-account", True, Artifact("yow-core", "https://private.example/a")),
-        (True, "acct-12345678", False, Artifact("yow-core", "https://private.example/a")),
+        (False, "acct-12345678", True, Artifact("yow-core", "releases/yow-core.apk")),
+        (True, "other-account", True, Artifact("yow-core", "releases/yow-core.apk")),
+        (True, "acct-12345678", False, Artifact("yow-core", "releases/yow-core.apk")),
         (True, "acct-12345678", True, None),
     ],
 )
 def test_rejects_missing_runtime_requirements(entitlement_active, device_owner, device_active, artifact):
-    secret = "test-secret"
-    token = make_token("acct-12345678", "yow-core", "device-12345678", 2000, secret)
-
     with pytest.raises(DownloadServiceError):
         authorize_download(
-            token=token,
+            token=make_token("acct-12345678", "yow-core", "device-12345678", 2000, SECRET),
             account_id="acct-12345678",
             product_id="yow-core",
             device_id="device-12345678",
-            signing_secret=secret,
+            signing_secret=SECRET,
             entitlement_active=entitlement_active,
             device_owner=device_owner,
             device_active=device_active,
             artifact=artifact,
+            storage_signer=signer(),
             now=1000,
         )
 
 
 def test_token_cannot_authorize_another_product():
-    secret = "test-secret"
-    token = make_token("acct-12345678", "yow-core", "device-12345678", 2000, secret)
-
     with pytest.raises(DownloadServiceError):
         authorize_download(
-            token=token,
+            token=make_token("acct-12345678", "yow-core", "device-12345678", 2000, SECRET),
             account_id="acct-12345678",
             product_id="different-product",
             device_id="device-12345678",
-            signing_secret=secret,
+            signing_secret=SECRET,
             entitlement_active=True,
             device_owner="acct-12345678",
             device_active=True,
-            artifact=Artifact("different-product", "https://private.example/a"),
+            artifact=Artifact("different-product", "releases/other.apk"),
+            storage_signer=signer(),
             now=1000,
         )
 
 
-def test_authorize_download_rejects_non_https_artifact():
-    import pytest
-    with pytest.raises(DownloadServiceError, match="artifact"):
+def test_storage_signing_failure_does_not_return_permanent_location():
+    with pytest.raises(DownloadServiceError, match="signed artifact unavailable"):
         authorize_download(
-            token=_token("acct-12345678", "yow-core", "device-12345678"),
+            token=make_token("acct-12345678", "yow-core", "device-12345678", 2000, SECRET),
             account_id="acct-12345678",
             product_id="yow-core",
             device_id="device-12345678",
@@ -91,5 +93,7 @@ def test_authorize_download_rejects_non_https_artifact():
             entitlement_active=True,
             device_owner="acct-12345678",
             device_active=True,
-            artifact=Artifact(product_id="yow-core", storage_url="http://storage.example/file.apk"),
+            artifact=Artifact("yow-core", "releases/yow-core.apk"),
+            storage_signer=HmacStorageSigner("", "gateway-secret"),
+            now=1000,
         )
