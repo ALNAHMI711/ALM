@@ -1,21 +1,18 @@
-"""HTTP-facing paid download contract.
-
-The route adapter can use this service to authorize a token and resolve the
-approved artifact. It deliberately returns metadata rather than a public,
-permanent download URL.
-"""
+"""HTTP-facing paid download contract."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
 from download_service import Artifact, DownloadServiceError, authorize_download
+from storage_signer import StorageSigner
 
 
 @dataclass(frozen=True)
 class DownloadResponse:
     product_id: str
-    storage_url: str
+    download_url: str
+    expires_at: int
 
 
 def authorize_download_request(
@@ -28,30 +25,30 @@ def authorize_download_request(
     entitlement_active: bool,
     device_owner: str | None,
     device_active: bool,
-    storage_url: str | None,
+    storage_key: str | None,
+    storage_signer: StorageSigner,
+    storage_url_ttl: int = 300,
     now: int | None = None,
 ) -> DownloadResponse:
-    artifact = None
-    if storage_url:
-        artifact = Artifact(product_id=product_id, storage_url=storage_url)
+    artifact = Artifact(product_id=product_id, storage_key=storage_key) if storage_key else None
 
-    try:
-        authorized = authorize_download(
-            token=token,
-            account_id=account_id,
-            product_id=product_id,
-            device_id=device_id,
-            signing_secret=signing_secret,
-            entitlement_active=entitlement_active,
-            device_owner=device_owner,
-            device_active=device_active,
-            artifact=artifact,
-            now=now,
-        )
-    except DownloadServiceError:
-        raise
+    authorized = authorize_download(
+        token=token,
+        account_id=account_id,
+        product_id=product_id,
+        device_id=device_id,
+        signing_secret=signing_secret,
+        entitlement_active=entitlement_active,
+        device_owner=device_owner,
+        device_active=device_active,
+        artifact=artifact,
+        storage_signer=storage_signer,
+        storage_url_ttl=storage_url_ttl,
+        now=now,
+    )
 
     return DownloadResponse(
-        product_id=authorized.product_id,
-        storage_url=authorized.storage_url,
+        product_id=product_id,
+        download_url=authorized.url,
+        expires_at=authorized.expires_at,
     )
