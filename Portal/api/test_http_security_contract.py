@@ -42,4 +42,4 @@ def test_paid_download_route_does_not_accept_client_storage_url():
     source = MAIN.read_text(encoding="utf-8")
     route = source[source.index('@app.get("/v1/download")'):source.index('class RegisterRequest')]
     assert 'storage_url:' not in route
-    assert 'ARTIFACT_URLS.get(product_id' in route
+    assert 'ARTIFACT_REGISTRY.get(product_id)' in route
