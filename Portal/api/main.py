@@ -5,6 +5,7 @@ import hmac
 import os
 import secrets
 import time
+from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -91,7 +92,8 @@ def products():
     return {"products": [{"id": "yow-core", "name": "YOW Core", "version": "0.1.0", "platform": "android"}]}
 
 
-app.mount("/web", StaticFiles(directory="Portal/web", html=True), name="web")
+WEB_DIR = Path(__file__).resolve().parents[1] / "web"
+app.mount("/web", StaticFiles(directory=WEB_DIR, html=True), name="web")
 
 
 class DeviceBind(BaseModel):
