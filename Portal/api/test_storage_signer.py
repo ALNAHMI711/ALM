@@ -26,3 +26,24 @@ def test_hmac_signer_rejects_non_https_gateway():
 def test_hmac_signer_rejects_invalid_ttl():
     with pytest.raises(StorageSigningError):
         HmacStorageSigner("https://cdn.example", "secret").sign(artifact_key="file.apk", expires_in=0, now=1000)
+
+
+def test_hmac_signer_rejects_excessive_ttl():
+    with pytest.raises(StorageSigningError):
+        HmacStorageSigner("https://cdn.example", "secret").sign(
+            artifact_key="file.apk", expires_in=3601, now=1000
+        )
+
+
+def test_hmac_signer_rejects_path_traversal_key():
+    with pytest.raises(StorageSigningError):
+        HmacStorageSigner("https://cdn.example", "secret").sign(
+            artifact_key="releases/../private.apk", expires_in=300, now=1000
+        )
+
+
+def test_hmac_signer_rejects_absolute_key():
+    with pytest.raises(StorageSigningError):
+        HmacStorageSigner("https://cdn.example", "secret").sign(
+            artifact_key="/private.apk", expires_in=300, now=1000
+        )
