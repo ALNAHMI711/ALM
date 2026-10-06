@@ -52,3 +52,11 @@ def test_download_routes_require_active_product_device_binding():
     assert "DeviceProductBinding" in token_route
     assert "DeviceProductBinding" in download_route
     assert "binding is None" in token_route
+
+
+def test_products_endpoint_reads_registry_metadata():
+    source = MAIN.read_text(encoding="utf-8")
+    route = source[source.index('@app.get("/v1/products")'):source.index('WEB_DIR =')]
+    assert "ARTIFACT_REGISTRY.all()" in route
+    assert '"kind": item.kind' in route
+    assert '"available": bool(item.storage_key)' in route
