@@ -93,7 +93,7 @@ namespace YOW.Content
                     continue;
                 }
 
-                var path = System.IO.Path.Combine(contentDirectory, pack.id + "-" + pack.version + ".pack");
+                var path = PackStoragePaths.GetPath(contentDirectory, pack.id, pack.version);
                 if (!System.IO.File.Exists(path))
                 {
                     invalid.Add(pair.Key);
